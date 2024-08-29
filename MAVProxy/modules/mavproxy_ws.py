@@ -149,7 +149,10 @@ class WebSocket(mp_module.MPModule):
         for connection in self.ws_connections:
             if connection.request.path == "/json":
                 if json_msg is None:
-                    json_msg = msg.to_json()
+                    try:
+                        json_msg = json.dumps(msg.to_dict(), allow_nan=False, skipkeys=True)
+                    except:
+                        continue
                 connection.send(json_msg)
             else:
                 if raw_msg is None:
