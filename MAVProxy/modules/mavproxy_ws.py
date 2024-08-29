@@ -3,7 +3,7 @@
 '''
 WebSocket Module
 Jim Heising
-Sept 2024
+August 2024
 '''
 
 from MAVProxy.modules.lib import mp_module, mp_settings
@@ -14,28 +14,48 @@ from pymavlink import mavutil
 import json
 
 mavlink_map = mavutil.mavlink.mavlink_map
+message_name_2_type_cache = {}
 
+
+# Some examples of JSON MAVLink messages
 # {"mavpackettype": "COMMAND_LONG", "target_system":0, "target_component": 0, "command": 400, "confirmation": 0, "param1": 1, "param2": 0, "param3": 0, "param4": 0, "param5": 0, "param6": 0, "param7": 0}
+# {"mavpackettype": "PARAM_REQUEST_LIST", "target_system":1, "target_component": 1}
+
+def get_mavlink_msg_type_from_name(name):
+    # Check to see if this is cached already
+    msg_type = message_name_2_type_cache.get(name)
+
+    if msg_type:
+        return msg_type
+
+    for msg_id in mavlink_map.keys():
+        msg_type = mavlink_map[msg_id]
+        mav_cmd_name = msg_type.msgname if hasattr(msg_type, "msgname") else msg_type.name
+        if mav_cmd_name == name:
+            # Cache this for future use
+            message_name_2_type_cache[name] = msg_type
+            return msg_type
+
 
 def json_to_mavlink(json_string):
     # Parse our JSON string
     mavlink_dict = json.loads(json_string)
 
-    # Get the name of the mav packet type
+    # Get the name of the MAVLink packet type
     requested_cmd_name = mavlink_dict["mavpackettype"]
 
-    # Loop through each mavlink message type and find one that matches our name
-    for msg_id in mavlink_map.keys():
-        msg_type = mavlink_map[msg_id]
-        mav_cmd_name = msg_type.msgname if hasattr(msg_type, "msgname") else msg_type.name
-        if mav_cmd_name == requested_cmd_name:
-            # If we get here, we've found a mavlink message that matches our mavpackettype name
-            # Now we can parse out our JSON attributes in their proper order create our MAVLink message
-            msg_args = []
-            for field_name in msg_type.fieldnames:
-                field_value = mavlink_dict.get(field_name)
-                msg_args.append(field_value)
-            return msg_type(*msg_args)
+    # Check to see if the message type is known
+    msg_type = get_mavlink_msg_type_from_name(requested_cmd_name)
+
+    if msg_type:
+        # If we get here, we've found a mavlink message that matches our mavpackettype name
+        # Now we can parse out our JSON attributes in their proper order create our MAVLink message
+        msg_args = []
+        for field_name in msg_type.fieldnames:
+            field_value = mavlink_dict.get(field_name)
+            msg_args.append(field_value)
+        return msg_type(*msg_args)
+
 
 class WebSocket(mp_module.MPModule):
     def __init__(self, mpstate):
@@ -69,8 +89,10 @@ class WebSocket(mp_module.MPModule):
 
         for link in links:
             ml_msg = None
+            # Should we turn a JSON value into a MAVLink message?
             if websocket.request.path == "/json":
                 ml_msg = json_to_mavlink(message)
+            # Or should we use the bytes as is?
             else:
                 ml_msg = link.mav.decode(str.encode(message))
 
@@ -123,6 +145,7 @@ class WebSocket(mp_module.MPModule):
         json_msg = None
         raw_msg = None
 
+        # Every time we get a MAVLink packet, we loop through all of our active websocket connections and send the results
         for connection in self.ws_connections:
             if connection.request.path == "/json":
                 if json_msg is None:
