@@ -12,6 +12,7 @@ from threading import Thread
 from websockets import ConnectionClosedOK
 from pymavlink import mavutil
 import json
+import traceback
 
 mavlink_map = mavutil.mavlink.mavlink_map
 message_name_2_type_cache = {}
@@ -20,6 +21,7 @@ message_name_2_type_cache = {}
 # Some examples of JSON MAVLink messages
 # {"mavpackettype": "COMMAND_LONG", "target_system":0, "target_component": 0, "command": 400, "confirmation": 0, "param1": 1, "param2": 0, "param3": 0, "param4": 0, "param5": 0, "param6": 0, "param7": 0}
 # {"mavpackettype": "PARAM_REQUEST_LIST", "target_system":1, "target_component": 1}
+# {"mavpackettype": "PARAM_REQUEST_READ", "target_system":1, "target_component": 1, "param_id": "", "param_index":1}
 
 def get_mavlink_msg_type_from_name(name):
     # Check to see if this is cached already
@@ -53,7 +55,11 @@ def json_to_mavlink(json_string):
         msg_args = []
         for field_name in msg_type.fieldnames:
             field_value = mavlink_dict.get(field_name)
+            # Convert strings to bytes
+            if isinstance(field_value, str):
+                field_value = field_value.encode("ascii")
             msg_args.append(field_value)
+
         return msg_type(*msg_args)
 
 
@@ -88,17 +94,20 @@ class WebSocket(mp_module.MPModule):
         links = self.mpstate.mav_master
 
         for link in links:
-            ml_msg = None
-            # Should we turn a JSON value into a MAVLink message?
-            if websocket.request.path == "/json":
-                ml_msg = json_to_mavlink(message)
-            # Or should we use the bytes as is?
-            else:
-                ml_msg = link.mav.decode(str.encode(message))
+            try:
+                ml_msg = None
+                # Should we turn a JSON value into a MAVLink message?
+                if websocket.request.path == "/json":
+                    ml_msg = json_to_mavlink(message)
+                # Or should we use the bytes as is?
+                else:
+                    ml_msg = link.mav.decode(str.encode(message))
 
-            # Finally send our MAVLink message to our AutoPilot
-            if ml_msg:
-                link.mav.send(ml_msg)
+                # Finally send our MAVLink message to our AutoPilot
+                if ml_msg:
+                    link.mav.send(ml_msg)
+            except Exception:
+                traceback.print_exc()
 
     def ws_server_handler(self, websocket):
         # Check to see if we should authenticate an X-API-KEY header before allowing this connection
