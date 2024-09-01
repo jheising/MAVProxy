@@ -17,12 +17,12 @@ import traceback
 mavlink_map = mavutil.mavlink.mavlink_map
 message_name_2_type_cache = {}
 
-
 # Some examples of JSON MAVLink messages
 # {"mavpackettype": "COMMAND_LONG", "target_system":0, "target_component": 0, "command": 400, "confirmation": 0, "param1": 1, "param2": 0, "param3": 0, "param4": 0, "param5": 0, "param6": 0, "param7": 0}
 # {"mavpackettype": "PARAM_REQUEST_LIST", "target_system":1, "target_component": 1}
 # {"mavpackettype": "PARAM_REQUEST_READ", "target_system":1, "target_component": 1, "param_id": "", "param_index":1}
 
+# Convert the name of a MAVLink message into its python class type
 def get_mavlink_msg_type_from_name(name):
     # Check to see if this is cached already
     msg_type = message_name_2_type_cache.get(name)
@@ -39,6 +39,7 @@ def get_mavlink_msg_type_from_name(name):
             return msg_type
 
 
+# Convert a JSON message into a proper MAVLink message
 def json_to_mavlink(json_string):
     # Parse our JSON string
     mavlink_dict = json.loads(json_string)
@@ -60,6 +61,7 @@ def json_to_mavlink(json_string):
                 field_value = field_value.encode("ascii")
             msg_args.append(field_value)
 
+        # Here we actually create the actual MAVLink message from the python class
         return msg_type(*msg_args)
 
 
@@ -79,18 +81,7 @@ class WebSocket(mp_module.MPModule):
         self.ws_server = None
         self.ws_connections = []
 
-    def cmd_ws(self, args):
-        if len(args) <= 0:
-            print("Usage: ws <start|stop|set>")
-            return
-        if args[0] == "start":
-            self.cmd_start()
-        if args[0] == "stop":
-            self.cmd_stop()
-        elif args[0] == "set":
-            self.ws_settings.command(args[1:])
-
-    def process_ws_in_msg(self, message, websocket):
+    def process_ws_input_msg(self, message, websocket):
         links = self.mpstate.mav_master
 
         for link in links:
@@ -101,12 +92,13 @@ class WebSocket(mp_module.MPModule):
                     ml_msg = json_to_mavlink(message)
                 # Or should we use the bytes as is?
                 else:
+                    # NOTE: This is not fully tested yet
                     ml_msg = link.mav.decode(str.encode(message))
 
-                # Finally send our MAVLink message to our AutoPilot
+                # Finally send our MAVLink message to our autopilot
                 if ml_msg:
                     link.mav.send(ml_msg)
-            except Exception:
+            except:
                 traceback.print_exc()
 
     def ws_server_handler(self, websocket):
@@ -123,21 +115,32 @@ class WebSocket(mp_module.MPModule):
         while True:
             try:
                 message = websocket.recv()
-                self.process_ws_in_msg(message, websocket)
+                self.process_ws_input_msg(message, websocket)
             except ConnectionClosedOK:
                 print("WebSocket client disconnected")
                 break
 
         self.ws_connections.remove(websocket)
 
-    def run_ws_server(self):
+    def ws_server_thread(self):
         self.cmd_stop()
         self.ws_server = serve(self.ws_server_handler, "", self.ws_settings.port)
         print("WebSocket server started on port %d" % self.ws_settings.port)
         self.ws_server.serve_forever()
 
+    def cmd_ws(self, args):
+        if len(args) <= 0:
+            print("Usage: ws <start|stop|set>")
+            return
+        if args[0] == "start":
+            self.cmd_start()
+        if args[0] == "stop":
+            self.cmd_stop()
+        elif args[0] == "set":
+            self.ws_settings.command(args[1:])
+
     def cmd_start(self):
-        self.run_thread = Thread(target=self.run_ws_server)
+        self.run_thread = Thread(target=self.ws_server_thread)
         self.run_thread.start()
 
     def cmd_stop(self):
@@ -159,12 +162,15 @@ class WebSocket(mp_module.MPModule):
             if connection.request.path == "/json":
                 if json_msg is None:
                     try:
+                        # Convert our MAVLink message into JSON
                         json_msg = json.dumps(msg.to_dict(), allow_nan=False, skipkeys=True)
                     except:
+                        traceback.print_exc()
                         continue
                 connection.send(json_msg)
             else:
                 if raw_msg is None:
+                    # Get the raw bytes
                     raw_msg = msg.get_msgbuf()
                 connection.send(raw_msg)
 
